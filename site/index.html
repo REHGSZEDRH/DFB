@@ -263,6 +263,10 @@ tbody tr.has-formal { cursor: pointer; }
   background: #fff; padding: 6px 12px;
 }
 .formal-image-row input[type="url"] { flex: 1 1 180px; min-width: 0; }
+.formal-drop-note { margin: 8px 0 0; color: var(--muted); font-size: 13px; line-height: 1.5; }
+.formal-dialog textarea.is-drop {
+  border-color: #8a3a2a; background: #fff8f3; box-shadow: inset 0 0 0 2px #8a3a2a;
+}
 
 </style>
 </head>
@@ -801,12 +805,13 @@ formalBack.innerHTML = '<div class="formal-dialog" role="dialog" aria-modal="tru
   + '<h2 id="formal-title"></h2>'
   + '<p class="formal-meta" id="formal-meta"></p>'
   + '<p class="formal-guide" id="formal-guide"></p>'
-  + '<label for="formal-text">正式設定<textarea id="formal-text" placeholder="可用 Markdown：標題、粗體、清單、表格、連結、圖片、程式碼。點那一列會照格式浮出。"></textarea></label>'
+  + '<label for="formal-text">正式設定<textarea id="formal-text" placeholder="把圖或任何檔案拖進這格，也可以貼上。不限檔案類型。"></textarea></label>'
+  + '<p class="formal-drop-note">把圖或任何檔案拖進上面的文字框即可。不限檔案類型，也可以貼上。</p>'
   + '<div class="formal-image-row">'
-  + '<button type="button" id="formal-image">插入圖片</button>'
-  + '<input id="formal-image-url" type="url" inputmode="url" placeholder="或貼 https 圖片網址" autocomplete="off">'
+  + '<button type="button" id="formal-image">插入圖片或檔案</button>'
+  + '<input id="formal-image-url" type="url" inputmode="url" placeholder="或貼 https 網址" autocomplete="off">'
   + '<button type="button" id="formal-image-url-add">放入網址</button>'
-  + '<input id="formal-file" type="file" accept="image/png,image/jpeg,image/gif,image/webp" hidden>'
+  + '<input id="formal-attach" type="file" multiple hidden>'
   + '</div>'
   + '<p class="formal-status" id="formal-status"></p>'
   + '<div class="formal-actions">'
@@ -852,9 +857,29 @@ function formalImageMarkdown(url, alt) {
   const safeUrl = String(url || "").trim().replace(/\)/g, "%29").replace(/\s/g, "");
   return "![" + safeAlt + "](" + safeUrl + ")";
 }
+function formalFileMarkdown(url, name) {
+  const safeName = String(name || "檔案").replace(/[\[\]\n]/g, "").slice(0, 80) || "檔案";
+  const safeUrl = String(url || "").trim().replace(/\)/g, "%29").replace(/\s/g, "");
+  return "[" + safeName + "](" + safeUrl + ")";
+}
+function formalUrlLooksImage(url) {
+  const clean = String(url || "").split("#")[0].split("?")[0].toLowerCase();
+  if (/^data:image\//i.test(url)) return true;
+  if (/\.(png|jpe?g|gif|webp|bmp|svg|avif|ico|jfif|apng)$/.test(clean)) return true;
+  if (/\.(pdf|zip|7z|rar|txt|json|docx?|xlsx?|pptx?|mp3|mp4|wav|ogg|heic|heif|tif|tiff)$/.test(clean)) return false;
+  return /^https?:\/\//i.test(url);
+}
+function formalSnippetForUrl(url, name) {
+  const clean = String(url || "").trim();
+  if (!clean) return "";
+  if (formalUrlLooksImage(clean)) return formalImageMarkdown(clean, name || "圖");
+  return formalFileMarkdown(clean, name || "檔案");
+}
 function formalInsertAtCursor(snippet) {
-  const start = formalText.selectionStart == null ? formalText.value.length : formalText.selectionStart;
-  const end = formalText.selectionEnd == null ? start : formalText.selectionEnd;
+  if (!snippet) return;
+  const focused = document.activeElement === formalText;
+  const start = !focused || formalText.selectionStart == null ? formalText.value.length : formalText.selectionStart;
+  const end = !focused || formalText.selectionEnd == null ? start : formalText.selectionEnd;
   const before = formalText.value.slice(0, start);
   const after = formalText.value.slice(end);
   const pad = before && !before.endsWith("\n") ? "\n" : "";
@@ -870,13 +895,17 @@ function formalBytesToB64(bytes) {
   }
   return btoa(bin);
 }
-function formalSniffType(bytes, fallback) {
+function formalSniffImage(bytes) {
+  if (!bytes || bytes.length < 4) return "";
   if (bytes[0] === 0x89 && bytes[1] === 0x50) return "image/png";
   if (bytes[0] === 0xff && bytes[1] === 0xd8) return "image/jpeg";
   if (bytes[0] === 0x47 && bytes[1] === 0x49) return "image/gif";
-  if (bytes[0] === 0x52 && bytes[1] === 0x49) return "image/webp";
-  if (fallback === "image/jpg") return "image/jpeg";
-  return fallback && fallback.startsWith("image/") ? fallback : "";
+  if (bytes[0] === 0x42 && bytes[1] === 0x4d) return "image/bmp";
+  if (bytes.length >= 12 && bytes[0] === 0x52 && bytes[1] === 0x49 && bytes[8] === 0x57 && bytes[9] === 0x45) return "image/webp";
+  return "";
+}
+function formalNameLooksImage(name) {
+  return /\.(png|jpe?g|gif|webp|bmp|svg|avif|ico|jfif|apng)$/i.test(String(name || ""));
 }
 function formalCompressImage(file) {
   return new Promise((resolve, reject) => {
@@ -890,7 +919,9 @@ function formalCompressImage(file) {
       const canvas = document.createElement("canvas");
       canvas.width = w;
       canvas.height = h;
-      canvas.getContext("2d").drawImage(img, 0, 0, w, h);
+      const ctx = canvas.getContext("2d");
+      if (!ctx) { URL.revokeObjectURL(url); reject(new Error("canvas")); return; }
+      ctx.drawImage(img, 0, 0, w, h);
       const tryQuality = (q) => {
         canvas.toBlob(blob => {
           if (!blob) { URL.revokeObjectURL(url); reject(new Error("compress")); return; }
@@ -905,108 +936,267 @@ function formalCompressImage(file) {
     img.src = url;
   });
 }
-async function formalPostImage(type, b64) {
-  const payload = JSON.stringify({ image: true, type: type, data: b64 });
-  const targets = ["/api/settings", "/api/images"];
-  for (const target of targets) {
+async function formalPostFile(type, b64, name) {
+  const targets = [
+    { url: "/api/settings", body: { image: true, type: type, data: b64, name: name || "" } },
+    { url: "/api/images", body: { type: type, data: b64, name: name || "" } }
+  ];
+  for (let i = 0; i < targets.length; i++) {
     try {
-      const res = await fetch(target, {
+      const res = await fetch(targets[i].url, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: target === "/api/images" ? JSON.stringify({ type: type, data: b64 }) : payload
+        body: JSON.stringify(targets[i].body)
       });
       const body = await res.json().catch(() => null);
-      if (res.ok && body && body.ok && body.url) return body.url;
+      if (res.ok && body && body.ok && body.url) return body;
     } catch (e) {}
-  }
-  return "";
-}
-async function formalUploadImage(file) {
-  if (!file) {
-    formalStatus.textContent = "沒有讀到圖片。請再貼一次，或改貼 https 網址。";
-    return;
-  }
-  formalStatus.textContent = "圖在處理…";
-  let blob = file;
-  let type = file.type === "image/jpg" ? "image/jpeg" : file.type;
-  if (type !== "image/gif") {
-    try { blob = await formalCompressImage(file); type = "image/jpeg"; }
-    catch (e) {}
-  }
-  const bytes = new Uint8Array(await blob.arrayBuffer());
-  type = formalSniffType(bytes, type);
-  if (!type || bytes.length > 1500000) {
-    formalStatus.textContent = "這張圖沒放進去。請用 png、jpeg、gif、webp，或改貼 https 網址。";
-    return;
-  }
-  const b64 = formalBytesToB64(bytes);
-  const alt = (file.name || "圖").replace(/\.[^.]+$/, "") || "圖";
-  if (formalShared) {
-    const url = await formalPostImage(type, b64);
-    if (url) {
-      formalInsertAtCursor(formalImageMarkdown(url, alt));
-      formalStatus.textContent = "圖已放進這格。再按儲存，其他人打開才看得到。";
-      return;
-    }
-  }
-  const dataUrl = "data:" + type + ";base64," + b64;
-  if (dataUrl.length > 500000) {
-    formalStatus.textContent = "圖太大，沒放進去。請換成較小的圖，或貼 https 網址。";
-    return;
-  }
-  formalInsertAtCursor(formalImageMarkdown(dataUrl, alt));
-  formalStatus.textContent = formalShared
-    ? "圖已放進文字框。網站的收圖功能還沒接上，這張會跟著文字存。再按儲存。"
-    : "圖已放進文字框。這個畫面沒連上網站，存了也只有這台看得到。";
-}
-function formalInsertImageUrl() {
-  const raw = document.getElementById("formal-image-url").value.trim();
-  if (!/^https?:\/\//i.test(raw)) {
-    formalStatus.textContent = "圖片網址要是 http 或 https。";
-    return;
-  }
-  formalInsertAtCursor(formalImageMarkdown(raw, "圖"));
-  document.getElementById("formal-image-url").value = "";
-  formalStatus.textContent = "圖片網址已放進這格。按儲存後才會留下。";
-}
-document.getElementById("formal-image").addEventListener("click", () => {
-  document.getElementById("formal-file").click();
-});
-document.getElementById("formal-file").addEventListener("change", e => {
-  const file = e.target.files && e.target.files[0];
-  e.target.value = "";
-  formalUploadImage(file);
-});
-document.getElementById("formal-image-url-add").addEventListener("click", formalInsertImageUrl);
-function formalClipboardFile(e) {
-  const dt = e.clipboardData;
-  if (!dt) return null;
-  if (dt.files && dt.files.length) {
-    for (let i = 0; i < dt.files.length; i++) {
-      const file = dt.files[i];
-      if (!file.type || file.type.startsWith("image/")) return file;
-    }
-  }
-  const items = dt.items;
-  if (!items) return null;
-  for (let i = 0; i < items.length; i++) {
-    const item = items[i];
-    if (item.kind === "file" || (item.type && item.type.startsWith("image/"))) {
-      const file = item.getAsFile && item.getAsFile();
-      if (file) return file;
-    }
   }
   return null;
 }
-formalBack.addEventListener("paste", e => {
-  const file = formalClipboardFile(e);
-  if (!file) return;
+function formalDataUrlToFile(dataUrl, name) {
+  try {
+    const m = /^data:([^;,]+)?(;base64)?,(.*)$/i.exec(String(dataUrl || ""));
+    if (!m) return null;
+    const type = m[1] || "application/octet-stream";
+    const payload = m[3] || "";
+    let bytes;
+    if (m[2]) {
+      const bin = atob(payload.replace(/\s/g, ""));
+      bytes = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    } else {
+      bytes = new TextEncoder().encode(decodeURIComponent(payload));
+    }
+    if (!bytes.length) return null;
+    return new File([bytes], name || "貼上的檔", { type: type });
+  } catch (e) {
+    return null;
+  }
+}
+let formalFileChain = Promise.resolve();
+function formalQueueFile(file) {
+  formalFileChain = formalFileChain.then(() => formalPutFile(file)).catch(() => {});
+}
+async function formalPutFile(file) {
+  if (!file) {
+    formalStatus.textContent = "沒有讀到檔案。請直接拖進文字框，或按「插入圖片或檔案」。";
+    return;
+  }
+  const label = file.name || "檔案";
+  formalStatus.textContent = "正在放進文字框：" + label;
+  let blob = file;
+  let type = file.type || "application/octet-stream";
+  const skipCompress = type === "image/gif" || type === "image/svg+xml" || /\.svg$/i.test(label);
+  let displayAsImage = type.indexOf("image/") === 0 || formalNameLooksImage(label);
+  if (!skipCompress && (displayAsImage || type === "" || type === "application/octet-stream")) {
+    try {
+      blob = await formalCompressImage(file);
+      type = "image/jpeg";
+      displayAsImage = true;
+    } catch (e) {}
+  }
+  const bytes = new Uint8Array(await blob.arrayBuffer());
+  if (!bytes.length) {
+    formalStatus.textContent = "這個檔是空的，沒放進去。";
+    return;
+  }
+  if (!displayAsImage && formalSniffImage(bytes)) displayAsImage = true;
+  if (bytes.length > 3000000) {
+    formalStatus.textContent = "超過 3 MB，沒放進去。請先縮小再拖進來。";
+    return;
+  }
+  const alt = label.replace(/\.[^.]+$/, "") || "圖";
+  let posted = null;
+  if (formalShared) posted = await formalPostFile(type, formalBytesToB64(bytes), label);
+  if (posted && posted.url) {
+    const asImage = posted.image == null ? displayAsImage : !!posted.image;
+    formalInsertAtCursor(asImage ? formalImageMarkdown(posted.url, alt) : formalFileMarkdown(posted.url, label));
+    formalStatus.textContent = "已放進文字框：" + label + "。再按儲存，其他人打開才看得到。";
+    return;
+  }
+  const dataUrl = "data:" + (type || "application/octet-stream") + ";base64," + formalBytesToB64(bytes);
+  if (dataUrl.length > 500000) {
+    formalStatus.textContent = "網站沒收下這個檔，它也太大，嵌不進文字框。請換成較小的檔，或先更新網站上的收檔功能。";
+    return;
+  }
+  formalInsertAtCursor(displayAsImage ? formalImageMarkdown(dataUrl, alt) : formalFileMarkdown(dataUrl, label));
+  formalStatus.textContent = formalShared
+    ? "已放進文字框：" + label + "。網站沒收檔，所以直接嵌在文字裡。再按儲存。"
+    : "已放進文字框：" + label + "。這個畫面沒連上網站，存了也只有這台看得到。";
+}
+function formalInsertImageUrl() {
+  const box = document.getElementById("formal-image-url");
+  const raw = box.value.trim();
+  if (!/^https?:\/\//i.test(raw)) {
+    formalStatus.textContent = "網址要是 http 或 https。";
+    return;
+  }
+  formalInsertAtCursor(formalSnippetForUrl(raw, "檔案"));
+  box.value = "";
+  formalStatus.textContent = "網址已放進文字框。按儲存後才會留下。";
+}
+function formalFilesFromTransfer(dt) {
+  const out = [];
+  if (!dt) return out;
+  if (dt.files && dt.files.length) {
+    for (let i = 0; i < dt.files.length; i++) if (dt.files[i]) out.push(dt.files[i]);
+    return out;
+  }
+  const items = dt.items;
+  if (!items) return out;
+  for (let i = 0; i < items.length; i++) {
+    const item = items[i];
+    if (!item) continue;
+    if (item.kind === "file" || (item.type && item.type.indexOf("image/") === 0)) {
+      const file = item.getAsFile && item.getAsFile();
+      if (file) out.push(file);
+    }
+  }
+  return out;
+}
+function formalHtmlImageSrcs(html) {
+  const out = [];
+  const raw = String(html || "");
+  const re = /<img\b[^>]*?\bsrc\s*=\s*(?:"([^"]+)"|'([^']+)'|([^\s>]+))/gi;
+  let m;
+  while ((m = re.exec(raw))) {
+    const src = (m[1] || m[2] || m[3] || "").replace(/&amp;/g, "&").trim();
+    if (/^(https?:|data:image\/)/i.test(src) && out.indexOf(src) < 0) out.push(src);
+  }
+  return out;
+}
+function formalHasHiddenFile(dt) {
+  if (!dt || !dt.items) return false;
+  for (let i = 0; i < dt.items.length; i++) {
+    const item = dt.items[i];
+    if (!item) continue;
+    if (item.kind === "file") return true;
+    if (item.type && item.type.indexOf("text/") !== 0) return true;
+  }
+  return false;
+}
+async function formalReadClipboardFiles() {
+  if (!navigator.clipboard || !navigator.clipboard.read) return [];
+  let items;
+  try { items = await navigator.clipboard.read(); }
+  catch (e) { return []; }
+  const files = [];
+  for (let i = 0; i < items.length; i++) {
+    const types = items[i].types || [];
+    for (let j = 0; j < types.length; j++) {
+      const type = types[j];
+      if (!type || type.indexOf("text/") === 0) continue;
+      try {
+        const blob = await items[i].getType(type);
+        const ext = (type.split("/")[1] || "bin").split("+")[0].replace(/[^a-z0-9]/gi, "") || "bin";
+        files.push(new File([blob], "貼上的檔." + ext, { type: blob.type || type }));
+      } catch (e) {}
+    }
+  }
+  return files;
+}
+function formalTakeUrls(dt) {
+  const urls = [];
+  if (!dt) return urls;
+  const add = (url) => {
+    const clean = String(url || "").trim();
+    if (!clean || urls.indexOf(clean) >= 0) return;
+    if (/^(https?:|data:)/i.test(clean)) urls.push(clean);
+  };
+  String(dt.getData("text/uri-list") || "").split(/\r?\n/).forEach(line => {
+    const u = line.trim();
+    if (u && u.charAt(0) !== "#") add(u);
+  });
+  formalHtmlImageSrcs(dt.getData("text/html")).forEach(add);
+  const plain = String(dt.getData("text/plain") || "").trim();
+  if (/^https?:\/\/\S+$/i.test(plain)) add(plain);
+  return urls;
+}
+function formalPutUrls(urls) {
+  let n = 0;
+  urls.forEach(url => {
+    if (/^data:/i.test(url)) {
+      const file = formalDataUrlToFile(url, "貼上的檔");
+      if (file) { formalQueueFile(file); n++; return; }
+    }
+    const snippet = formalSnippetForUrl(url, "檔案");
+    if (snippet) { formalInsertAtCursor(snippet); n++; }
+  });
+  if (n) formalStatus.textContent = "已放進文字框。再按儲存。";
+  return n;
+}
+function formalOnPaste(e) {
+  if (formalBack.hidden || !formalBack.contains(e.target)) return;
+  const dt = e.clipboardData;
+  if (!dt) return;
+  const files = formalFilesFromTransfer(dt);
+  if (files.length) {
+    e.preventDefault();
+    files.forEach(formalQueueFile);
+    return;
+  }
+  const imgs = formalHtmlImageSrcs(dt.getData("text/html"));
+  if (imgs.length) {
+    e.preventDefault();
+    formalPutUrls(imgs);
+    return;
+  }
+  const plain = dt.getData("text/plain") || "";
+  const html = dt.getData("text/html") || "";
+  if (formalHasHiddenFile(dt) || (!plain && !html && e.target === formalText)) {
+    e.preventDefault();
+    formalReadClipboardFiles().then(more => {
+      if (more.length) more.forEach(formalQueueFile);
+      else formalStatus.textContent = "剪貼簿沒有交出檔案。請把檔案直接拖進文字框。";
+    });
+  }
+}
+function formalExternalDrag(e) {
+  const dt = e.dataTransfer;
+  if (!dt || !dt.types) return false;
+  for (let i = 0; i < dt.types.length; i++) {
+    if (dt.types[i] === "Files" || dt.types[i] === "text/uri-list") return true;
+  }
+  return false;
+}
+function formalOnDragOver(e) {
+  if (formalBack.hidden || !formalExternalDrag(e)) return;
   e.preventDefault();
-  formalUploadImage(file);
+  if (e.dataTransfer) e.dataTransfer.dropEffect = "copy";
+  formalText.classList.add("is-drop");
+}
+function formalOnDrop(e) {
+  if (formalBack.hidden || !formalExternalDrag(e)) return;
+  e.preventDefault();
+  formalText.classList.remove("is-drop");
+  const files = formalFilesFromTransfer(e.dataTransfer);
+  if (files.length) {
+    files.forEach(formalQueueFile);
+    return;
+  }
+  if (!formalPutUrls(formalTakeUrls(e.dataTransfer))) {
+    formalStatus.textContent = "沒讀到檔案。請把檔案直接拖進文字框。";
+  }
+}
+document.getElementById("formal-image").addEventListener("click", () => {
+  document.getElementById("formal-attach").click();
 });
+document.getElementById("formal-attach").addEventListener("change", e => {
+  const files = e.target.files ? Array.prototype.slice.call(e.target.files) : [];
+  e.target.value = "";
+  if (!files.length) return;
+  files.forEach(formalQueueFile);
+});
+document.getElementById("formal-image-url-add").addEventListener("click", formalInsertImageUrl);
 document.getElementById("formal-image-url").addEventListener("keydown", e => {
   if (e.key === "Enter") { e.preventDefault(); formalInsertImageUrl(); }
 });
+document.addEventListener("paste", formalOnPaste, true);
+document.addEventListener("dragenter", formalOnDragOver, true);
+document.addEventListener("dragover", formalOnDragOver, true);
+document.addEventListener("drop", formalOnDrop, true);
+document.addEventListener("dragend", () => formalText.classList.remove("is-drop"));
 function formalPersist() {
   formalMemory = true;
   const el = document.getElementById("formal-seed");
@@ -1082,8 +1272,14 @@ function formalBar() {
     + '<div><button type="button" id="formal-download">下載含設定的目錄</button>'
     + '<button type="button" id="formal-export">匯出設定</button>'
     + '<button type="button" id="formal-copy">複製全部設定</button>'
-    + '<label class="formal-import">匯入設定<input id="formal-file" type="file" accept="application/json,.json" hidden></label></div>';
+    + '<label class="formal-import">匯入設定<input id="formal-import-file" type="file" accept="application/json,.json" hidden></label></div>';
   iss.appendChild(bar);
+  const importInput = bar.querySelector("#formal-import-file");
+  if (importInput) importInput.addEventListener("change", e => {
+    const file = e.target.files && e.target.files[0];
+    e.target.value = "";
+    if (file) importFormal(file);
+  });
   formalCount();
 }
 function formalInfo(key) {
@@ -1127,7 +1323,7 @@ function saveFormal(opts) {
   const urlBox = document.getElementById("formal-image-url");
   const pendingUrl = urlBox && urlBox.value.trim();
   if (!clearing && pendingUrl && /^https?:\/\//i.test(pendingUrl)) {
-    formalInsertAtCursor(formalImageMarkdown(pendingUrl, "圖"));
+    formalInsertAtCursor(formalSnippetForUrl(pendingUrl, "圖"));
     urlBox.value = "";
   }
   const info = formalInfo(formalOpen);
@@ -1279,7 +1475,7 @@ document.getElementById("formal-text").addEventListener("keydown", e => {
   if ((e.ctrlKey || e.metaKey) && e.key === "Enter") { e.preventDefault(); saveFormal(); }
 });
 formalBack.addEventListener("change", e => {
-  if (e.target.id === "formal-file" && e.target.files && e.target.files[0]) {
+  if (e.target.id === "formal-import-file" && e.target.files && e.target.files[0]) {
     importFormal(e.target.files[0]);
     e.target.value = "";
   }
@@ -1311,15 +1507,18 @@ function formalPlaceTip(anchor) {
 
 function mdUrl(url) {
   const u = String(url || "").trim().replace(/&amp;/g, "&").replace(/&quot;/g, "\"");
-  if (!/^(https?:|mailto:)/i.test(u)) return "";
-  return esc(u);
+  if (/^(https?:|mailto:)/i.test(u)) return esc(u);
+  if (/^\/api\/images\?id=[a-f0-9]{24}$/.test(u)) return esc(u);
+  if (/^\/api\/settings\?(?:image|file)=[a-f0-9]{24}$/.test(u)) return esc(u);
+  if (/^data:(?:image\/[a-z0-9.+-]+|application\/(?:octet-stream|pdf|zip|json)|text\/plain)(?:;charset=[a-z0-9._-]+)?;base64,[a-z0-9+/=\s]+$/i.test(u)) return u;
+  return "";
 }
 function mdImageUrl(url) {
   const u = String(url || "").trim().replace(/&amp;/g, "&").replace(/&quot;/g, "\"");
   if (/^https?:\/\//i.test(u)) return esc(u);
   if (/^\/api\/images\?id=[a-f0-9]{24}$/.test(u)) return esc(u);
-  if (/^\/api\/settings\?image=[a-f0-9]{24}$/.test(u)) return esc(u);
-  if (/^data:image\/(?:png|jpeg|gif|webp);base64,[A-Za-z0-9+/=]+$/i.test(u)) return u;
+  if (/^\/api\/settings\?(?:image|file)=[a-f0-9]{24}$/.test(u)) return esc(u);
+  if (/^data:image\/[a-z0-9.+-]+(?:;charset=[a-z0-9._-]+)?;base64,[a-z0-9+/=\s]+$/i.test(u)) return u;
   return "";
 }
 function mdInline(raw) {
