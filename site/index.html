@@ -184,13 +184,17 @@ th.col-kind { color: #f6f1ea; }
   position: fixed; z-index: 45; width: 440px; height: 240px;
   min-width: 220px; min-height: 120px;
   max-width: calc(100vw - 16px); max-height: calc(100vh - 16px);
-  overflow: auto; resize: both; padding: 10px 12px 22px;
+  overflow-x: hidden; overflow-y: auto; resize: both; padding: 10px 12px 22px;
+  overflow-wrap: anywhere; word-break: break-word;
   background: #fffdf8; color: var(--ink); border: 1px solid #e2d8c8; border-radius: 12px;
   box-shadow: 0 14px 36px rgba(28, 25, 21, 0.2); font-size: 14px; line-height: 1.55;
 }
 .formal-tip[hidden] { display: none !important; }
 .formal-tip strong { display: block; margin-bottom: 6px; font-size: 12px; letter-spacing: 0.12em; color: #8a3a2a; }
-.formal-tip div { white-space: normal; }
+.formal-tip div { white-space: normal; max-width: 100%; overflow-wrap: anywhere; word-break: break-word; }
+.formal-md, .formal-md p, .formal-md li, .formal-md a, .formal-md code, .formal-md th, .formal-md td {
+  max-width: 100%; overflow-wrap: anywhere; word-break: break-word;
+}
 
 .formal-md h1, .formal-md h2, .formal-md h3, .formal-md h4 { margin: 0.55em 0 0.25em; line-height: 1.3; }
 .formal-md h1 { font-size: 1.35em; }
@@ -201,13 +205,13 @@ th.col-kind { color: #f6f1ea; }
 .formal-md li { margin: 0.15em 0; }
 .formal-md blockquote { margin: 0.4em 0; padding: 0.15em 0.7em; border-left: 3px solid #c4b4a0; color: #5e574e; }
 .formal-md code { font-family: var(--mono); font-size: 0.86em; background: #efe6d8; padding: 0.05em 0.3em; border-radius: 4px; }
-.formal-md pre { margin: 0.4em 0; background: #231f1b; color: #f3eee6; padding: 8px 10px; border-radius: 8px; overflow: auto; }
+.formal-md pre { margin: 0.4em 0; background: #231f1b; color: #f3eee6; padding: 8px 10px; border-radius: 8px; overflow-x: hidden; overflow-y: auto; white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; }
 .formal-md pre code { background: none; color: inherit; padding: 0; }
-.formal-md table { width: 100%; border-collapse: collapse; margin: 0.4em 0; font-size: 13px; }
+.formal-md table { width: 100%; max-width: 100%; table-layout: fixed; border-collapse: collapse; margin: 0.4em 0; font-size: 13px; }
 .formal-md th, .formal-md td { border: 1px solid #e2d8c8; padding: 4px 8px; text-align: left; }
 .formal-md th { background: #f6f1ea; }
 .formal-md a { color: #8a3a2a; }
-.formal-md img { max-width: 100%; height: auto; }
+.formal-md img { display: block; max-width: 100%; height: auto; }
 .formal-md hr { border: 0; border-top: 1px solid #e2d8c8; margin: 0.7em 0; }
 .formal-md input[type="checkbox"] { margin-right: 0.3em; }
 
