@@ -1,0 +1,19 @@
+[build]
+  publish = "site"
+  command = "npm install"
+
+[functions]
+  directory = "netlify/functions"
+  node_bundler = "esbuild"
+
+[[redirects]]
+  from = "/api/settings"
+  to = "/.netlify/functions/settings"
+  status = 200
+  force = true
+
+[[redirects]]
+  from = "/api/images"
+  to = "/.netlify/functions/images"
+  status = 200
+  force = true

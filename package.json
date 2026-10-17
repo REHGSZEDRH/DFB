@@ -1,0 +1,7 @@
+{
+  "name": "spell-catalog",
+  "private": true,
+  "dependencies": {
+    "@netlify/blobs": "11.1.4"
+  }
+}
